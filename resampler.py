@@ -9,7 +9,6 @@ def fromFile(filename, resolution):
     """ Given a GeoTIFF filename, returns an array of dicts (one for each band) of the form:
         {cell : value}, for rHEALPix cells of the given resolution (we normally use 13, slightly larger than a landsat pixel)
         each cell's value is interpolated from nearby pixels, and missing pixels are ignored
-        NaN values imply the interpolator didn't know what to put there
     """
     dataset = gdal.Open(filename, gdalconst.GA_ReadOnly)
     width = dataset.RasterXSize
