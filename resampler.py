@@ -18,25 +18,45 @@ def make_cell_data(band_data, missing_value, resolution_gap, bottom, top, left, 
     data = np.zeros((3 ** resolution_gap, 3 ** resolution_gap), dtype=np.int16)
     w = (right - left) / (3 ** resolution_gap)
     h = (bottom - top) / (3 ** resolution_gap)
-    for y in range(data.shape[0]):
-        for x in range(data.shape[1]):
-            # Numba doesn't do bounds checks, so we have to do this fancy stuff
-            l = max(0, int(left+w*x))
-            r = max(0, int(left+w*(x+1)))
-            t = max(0, int(top+h*y))
-            b = max(0, int(top+h*(y+1)))
-            l_idx = min(l, band_data.shape[0]-1)
-            r_idx = min(r+1, band_data.shape[0])
-            t_idx = min(t, band_data.shape[1]-1)
-            b_idx = min(b+1, band_data.shape[1])
-            if l_idx < r_idx and t_idx < b_idx:
-                data[x, y] = 0
-                norm_subslice = band_data[l_idx:r_idx, t_idx:b_idx]
-                subslice = norm_subslice.flatten()
-                valid = subslice != missing_value
-                if valid.any():
-                    value = subslice[valid].mean()
-                    data[x,y] = int(value)
+    rng = np.arange(3 ** resolution_gap)
+
+    # Numba doesn't do bounds checks or support .clamp(), so we have to do this
+    # fancy stuff
+    lefts = (left + w*rng).astype(np.int64)
+    lefts[lefts < 0] = 0
+    lefts[lefts >= band_data.shape[0]] = band_data.shape[0] - 1
+
+    rights = (left + w*(rng+1)).astype(np.int64)
+    rights[rights < 0] = 0
+    rights[rights > band_data.shape[0]] = band_data.shape[0]
+
+    tops = (top + h*rng).astype(np.int64)
+    tops[tops < 0] = 0
+    tops[tops >= band_data.shape[1]] = band_data.shape[1] - 1
+
+    bots = (top + h*(rng+1)).astype(np.int64)
+    bots[bots < 0] = 0
+    bots[bots > band_data.shape[1]] = band_data.shape[1]
+
+    # If we don't do this check then we end up with an exception once we call
+    # flatten() on an empty array :(
+    valid_y, = (tops < bots).nonzero()
+    valid_x, = (lefts < rights).nonzero()
+
+    for y in valid_y:
+        t_idx = tops[y]
+        b_idx = bots[y]
+        sub_data = band_data[:, t_idx:b_idx]
+        for x in valid_x:
+            l_idx = lefts[x]
+            r_idx = rights[x]
+            norm_subslice = sub_data[l_idx:r_idx, :]
+            flat_subslice = norm_subslice.flatten()
+            subslice = flat_subslice[flat_subslice != missing_value]
+            if subslice.size:
+                value = subslice.mean()
+                data[x, y] = int(value)
+
     return data
 
 def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
@@ -91,6 +111,7 @@ def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
             if pixel_value is np.ma.masked:
                 continue
 
+            assert right > left and bottom > top
             data = make_cell_data(band_data, np.int16(missing_val), resolution_gap, bottom, top, left, right)
 
             # Write the HDF5 group. This is much faster than writing inline,
