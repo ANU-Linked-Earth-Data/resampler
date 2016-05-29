@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import h5py
 import itertools
 
@@ -24,7 +26,9 @@ def create_dggs_hierarchy(start, end, cell=""):
         name = "/".join((cell,) + tup)
         f_dggs.create_group(name)
 
-
-# Creates tree for all nodes from
-# N000000 to N099999 (as well as their parents)
-f_dggs = create_dggs_hierarchy(2,6, 'N0')
+if __name__ == '__main__':
+    print(
+        'Creating tree for all nodes from N000000 to N099999 (as well as '
+        'their parents)'
+    )
+    create_dggs_hierarchy(2,6, 'N0')

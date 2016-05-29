@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import h5py
 import matplotlib.pyplot as plt
 import sys
@@ -11,8 +13,7 @@ def show_tree(hdf5_name):
         hdf5_file.visit(lambda name: print(name))   
     finally:
         hdf5_file.close()
-    
-    
+
 def show_data(hdf5_name, cell):
     hdf5_file = h5py.File(hdf5_name, "r")
     try:

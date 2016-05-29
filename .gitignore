@@ -1,3 +1,6 @@
-__pycache__
+__pycache__/
+env/
 *.tif
 *.hdf5
+*.swp
+*.h5
