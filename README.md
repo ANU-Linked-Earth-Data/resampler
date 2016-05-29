@@ -6,18 +6,20 @@ format which partitions data into a different HDF5 dataset for each grid cell.
 
 To run the resampler, do the following:
 
-```
-# Make sure you have Python 3 and virtualenv installed first!
-virtualenv env -p `which python3`
+```sh
+sudo apt-get install build-essential libedit-dev llvm-3.7 python-virtualenv \
+    python3-dev libgdal-dev
+virtualenv env -p "$(which python3)"
 . env/bin/activate
-pip install -r requirements.txt
+# numba needs LLVM 3.7
+LLVM_CONFIG="$(which llvm-config-3.7)" pip install -r requirements.txt
 ./resampler.py some-geotiff-you-downloaded.tif result.h5 2 7 5
 ```
 
 The Python 3 requirement is important! Also, you might get some issues
 installing GDAL. If so, try something like:
 
-```
+```sh
 pip install --global-option=build_ext --global-option="-I/usr/include/gdal" \
     GDAL==1.11.2
 ```

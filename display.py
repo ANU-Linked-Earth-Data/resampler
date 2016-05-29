@@ -18,8 +18,10 @@ def show_data(hdf5_name, cell):
     hdf5_file = h5py.File(hdf5_name, "r")
     try:
         data = hdf5_file[cell_name(cell) + "/data"]
+        import ipdb; ipdb.set_trace()
         plt.imshow(data)
         plt.show()
+        print(data.shape)
     finally:
         hdf5_file.close()
 
