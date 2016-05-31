@@ -26,3 +26,8 @@ pip install --global-option=build_ext --global-option="-I/usr/include/gdal" \
 
 You can replace `1.11.2` with a more recent release in the `1.11.X` series if
 one is available.
+
+For whatever reason, the `display` script didn't work for me initially (in a
+virtualenv on Ubuntu 16.04). I fixed the issue by doing `sudo apt install
+tk-dev` and updating `display.py` to fall back to the Tk matplotlib renderer if
+no other interactive renderer is enabled.
