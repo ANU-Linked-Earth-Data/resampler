@@ -9,7 +9,9 @@ def cell_name(cell):
 def show_tree(hdf5_name):
     hdf5_file = h5py.File(hdf5_name, "r")
     try:
-        hdf5_file.visit(lambda name: print(name))   
+        hdf5_file.visit(lambda name: print(name))
+        for k, v in hdf5_file.attrs.items():
+            print(k + ": " + str(v))
     finally:
         hdf5_file.close()
 
