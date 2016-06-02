@@ -33,21 +33,34 @@ def make_cell_data(band_data, missing_value, resolution_gap, bottom, top, left, 
 
     # Numba doesn't do bounds checks or support .clamp(), so we have to do this
     # fancy stuff
+    band_width = band_data.shape[1]
+
     lefts = (left + w*rng).astype(np.int64)
     lefts[lefts < 0] = 0
-    lefts[lefts >= band_data.shape[0]] = band_data.shape[0] - 1
+    # See below for explanation of *_invalid_mask
+    horiz_invalid_mask = lefts >= band_width
+    lefts[horiz_invalid_mask] = 0
 
     rights = (left + w*(rng+1)).astype(np.int64)
     rights[rights < 0] = 0
-    rights[rights > band_data.shape[0]] = band_data.shape[0]
+    rights[rights > band_width] = band_width
+    rights[horiz_invalid_mask] = 0
+
+    band_height = band_data.shape[1]
 
     tops = (top + h*rng).astype(np.int64)
     tops[tops < 0] = 0
-    tops[tops >= band_data.shape[1]] = band_data.shape[1] - 1
+    # Idea of *_invalid_mask is that if the top for a window is outside of the
+    # image, then we'll always get garbage. We set those tops to 0 so that they
+    # are cancelled by the "tops < bots" check below.
+    vert_invalid_mask = tops >= band_height
+    tops[vert_invalid_mask] = 0
 
     bots = (top + h*(rng+1)).astype(np.int64)
     bots[bots < 0] = 0
-    bots[bots > band_data.shape[1]] = band_data.shape[1]
+    bots[bots > band_height] = band_height
+    # Also need to invalidate bots corresponding to tops outside the image
+    bots[vert_invalid_mask] = 0
 
     # If we don't do this check then we end up with an exception once we call
     # flatten() on an empty array :(
