@@ -13,8 +13,8 @@ import sys
 
 # For parsing AGDC filenames
 AGDC_RE = re.compile(
-    r'^(?P<sat_id>[^_]+)_(?P<sensor_id>[^_]+)_(?P<prod_code>[^_]+)_'
-    r'(?P<lon>[^_]+)_(?P<lat>[^_]+)_(?P<year>\d{4})-(?P<month>\d{2})-'
+    r'^(?P<sat_id>[^_]+)_(?P<sensor_id>[^1234567890]+)_(?P<prod_code>[^_1234567890]+)_'
+    r'(?P<lon>[-0123456789]+)_(?P<lat>[^_]+)_(?P<year>\d{4})-(?P<month>\d{2})-'
     r'(?P<day>\d{2})T(?P<hour>\d+)-(?P<minute>\d+)-(?P<second>\d+(\.\d+)?)'
     r'\.tif$'
 )
@@ -142,6 +142,7 @@ def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
             break
 
     tif_meta = parse_agdc_fn(filename)
+    add_meta(tif_meta, hdf5_file)
 
     print("Processing band ", band_num, "/", numBands, "...")
     band = dataset.GetRasterBand(band_num)
@@ -182,7 +183,6 @@ def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
             # Write the HDF5 group. This is much faster than writing inline,
             # and lets us use numba.
             group = hdf5_file.create_group(cell_name(cell))
-            add_meta(tif_meta, group)
             group.attrs['bounds'] = np.array([
                 north_west, north_east, south_east, south_west, north_west
             ])
