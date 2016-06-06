@@ -3,12 +3,14 @@
 from osgeo import gdal
 from osgeo import gdalconst
 import pytz
-import rhealpix_dggs.dggs as dggs
+from rhealpix_dggs import dggs
 import numpy as np
 import h5py
+
+from argparse import ArgumentParser
 from itertools import chain
 import re
-import sys
+from time import time
 
 
 # For parsing AGDC filenames
@@ -70,16 +72,16 @@ def make_cell_data(band_data, missing_value, resolution_gap, bottom, top, left, 
     for y in valid_y:
         t_idx = tops[y]
         b_idx = bots[y]
-        sub_data = band_data[:, t_idx:b_idx]
+        sub_data = band_data[t_idx:b_idx, :]
         for x in valid_x:
             l_idx = lefts[x]
             r_idx = rights[x]
-            norm_subslice = sub_data[l_idx:r_idx, :]
+            norm_subslice = sub_data[:, l_idx:r_idx]
             flat_subslice = norm_subslice.flatten()
             subslice = flat_subslice[flat_subslice != missing_value]
             if subslice.size:
                 value = subslice.mean()
-                data[x, y] = int(value)
+                data[y, x] = int(value)
 
     return data
 
@@ -135,7 +137,24 @@ def add_meta(metadata, group):
     return group
 
 
-def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
+def apply_transform(transform, col, row):
+    """Take a transform from GDAL's ``GetGeoTransform`` and apply it to
+    translate a column and row in an image into a longitude and latitude"""
+    lon, lat = gdal.ApplyGeoTransform(transform, col, row)
+    return lon, lat
+
+
+def invert_transform(transform, lon, lat):
+    """Like apply_transform, but inverts the transform first so that it returns
+    pixel coordinates from latitude and longitude."""
+    all_good, actual_transform = gdal.InvGeoTransform(transform)
+    assert all_good, 'InvGeoTransform failed (somehow?)'
+    # Yup, (col, row) in pixel coordinates
+    px, py = gdal.ApplyGeoTransform(actual_transform, lon, lat)
+    return px, py
+
+
+def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
     """ Reads a geotiff file and converts the data into a hdf5 rhealpix file """
     dataset = gdal.Open(filename, gdalconst.GA_ReadOnly)
     width = dataset.RasterXSize
@@ -144,18 +163,20 @@ def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
     transform = dataset.GetGeoTransform()
     rddgs = dggs.RHEALPixDGGS()
     for resolution in range(0,20):
+        upper_left = apply_transform(transform, 0, 0)
+        lower_right = apply_transform(transform, width, height)
         cells = rddgs.cells_from_region(
-            resolution,
-            (transform[0], transform[3]),
-            (transform[0] + width * transform[1], transform[3] + height * transform[5]),
-            plane=False
+            resolution, upper_left, lower_right, plane=False
         )
         if len(cells) > 1:
             outer_res = resolution - 1
             break
 
-    tif_meta = parse_agdc_fn(filename)
-    add_meta(tif_meta, hdf5_file)
+    try:
+        tif_meta = parse_agdc_fn(filename)
+        add_meta(tif_meta, hdf5_file)
+    except ValueError:
+        print("Can't read metadata from filename. Is it in the AGDC format?")
 
     print("Processing band ", band_num, "/", numBands, "...")
     band = dataset.GetRasterBand(band_num)
@@ -165,11 +186,10 @@ def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
     band_data = band.ReadAsArray()
     for resolution in range(outer_res, max_resolution + 1):
         print("Processing resolution ", resolution, "/", max_resolution, "...")
+        upper_left = apply_transform(transform, 0, 0)
+        lower_right = apply_transform(transform, width, height)
         cells = rddgs.cells_from_region(
-            resolution,
-            (transform[0], transform[3]),
-            (transform[0] + width * transform[1], transform[3] + height * transform[5]),
-            plane=False
+            resolution, upper_left, lower_right, plane=False
         )
         for cell in chain(*cells):
             north_west, north_east, south_east, south_west = cell.vertices(plane=False)
@@ -177,16 +197,14 @@ def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
             # Get clamped bounds in image (row/col) coordinates
             left, top = north_west
             right, bottom = south_east
-            left   = int((left   - transform[0]) / transform[1])
-            right  = int((right  - transform[0]) / transform[1])
-            top    = int((top    - transform[3]) / transform[5])
-            bottom = int((bottom - transform[3]) / transform[5])
+            left, top = map(int, invert_transform(transform, left, top))
+            right, bottom = map(int, invert_transform(transform, right, bottom))
             l = max(0, left)
             r = max(0, right)
             t = max(0, top)
             b = max(0, bottom)
 
-            pixel_value = masked_data[l:r+1,t:b+1].mean()
+            pixel_value = masked_data[t:b+1,l:r+1].mean()
             if pixel_value is np.ma.masked:
                 continue
 
@@ -204,16 +222,35 @@ def fromFile(filename, hdf5_file, band_num, max_resolution, resolution_gap):
             group['data'] = data
 
 
-def run_code(tif_name, hdf5_name, band_num, max_res, res_gap):
-    with h5py.File(hdf5_name, "w") as hdf5_file:
-        fromFile(tif_name, hdf5_file, int(band_num), int(max_res), int(res_gap))
-    print("Done!")
+parser = ArgumentParser()
+parser.add_argument('input', type=str, help='path to input GeoTIFF')
+parser.add_argument('output', type=str, help='path to output HDF5 file')
+parser.add_argument(
+    '--band', type=int, default=2, help='band from GeoTIFF to resample'
+)
+parser.add_argument(
+    '--max-res', type=int, dest='max_res', default=6,
+    help='maximum DGGS depth to resample at'
+)
+parser.add_argument(
+    '--res-gap', type=int, dest='res_gap', default=5,
+    help='number of DGGS levels to go down when generating tile data'
+)
+
 
 if __name__ == "__main__":
-    if len(sys.argv) != 6:
-        print("-------------------------------------------------------------")
-        print("Usage: resampler.py input.tif output.hdf5 band max_resolution resolution_gap")
-        print("-------------------------------------------------------------")
-        print("Example: resampler.py test.tif result.hdf5 2 7 5")
-    else:
-        run_code(*sys.argv[1:])
+    args = parser.parse_args()
+    print('Reading from %s and writing to %s' % (args.input, args.output))
+    print(
+        'Resampling band %i to depth %i with gap %i (so %i pixels per tile)'
+        % (args.band, args.max_res, args.res_gap, 9 ** args.res_gap)
+    )
+
+    start_time = time()
+    with h5py.File(args.output, "w") as hdf5_file:
+        from_file(
+            args.input, hdf5_file, args.band, args.max_res, args.res_gap
+        )
+
+    elapsed = time() - start_time
+    print("Done! Took %.2fs" % elapsed)
