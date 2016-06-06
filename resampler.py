@@ -219,7 +219,7 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
             ])
             group.attrs['centre'] = np.array(cell.centroid(plane=False))
             group['pixel'] = pixel_value
-            group['data'] = data
+            group.create_dataset('data', data=data, compression='szip')
 
 
 parser = ArgumentParser()
