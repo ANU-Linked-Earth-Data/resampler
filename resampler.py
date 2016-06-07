@@ -177,6 +177,7 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
         add_meta(tif_meta, hdf5_file)
     except ValueError:
         print("Can't read metadata from filename. Is it in the AGDC format?")
+        tif_meta = None
 
     print("Processing band ", band_num, "/", numBands, "...")
     band = dataset.GetRasterBand(band_num)
@@ -214,6 +215,8 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
             # Write the HDF5 group. This is much faster than writing inline,
             # and lets us use numba.
             group = hdf5_file.create_group(cell_name(cell))
+            if tif_meta is not None:
+                add_meta(tif_meta, group)
             group.attrs['bounds'] = np.array([
                 north_west, north_east, south_east, south_west, north_west
             ])
