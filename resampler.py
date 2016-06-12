@@ -149,8 +149,8 @@ def apply_transform(transform, col, row):
 def invert_transform(transform, lon, lat):
     """Like apply_transform, but inverts the transform first so that it returns
     pixel coordinates from latitude and longitude."""
-    all_good, actual_transform = gdal.InvGeoTransform(transform)
-    assert all_good, 'InvGeoTransform failed (somehow?)'
+    actual_transform = gdal.InvGeoTransform(transform)
+    assert actual_transform, 'InvGeoTransform failed'
     # Yup, (col, row) in pixel coordinates
     px, py = gdal.ApplyGeoTransform(actual_transform, lon, lat)
     return px, py

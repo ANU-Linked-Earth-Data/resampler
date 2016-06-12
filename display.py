@@ -19,7 +19,7 @@ def show_data(hdf5_name, cell):
     hdf5_file = h5py.File(hdf5_name, "r")
     try:
         data = hdf5_file[cell_name(cell) + "/data"]
-        plt.imshow(data)
+        plt.imshow(data, interpolation='none')
         plt.show()
         print(data.shape)
     finally:
