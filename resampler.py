@@ -28,7 +28,9 @@ def cell_name(cell):
 from numba import jit, int16, int32
 @jit(int16[:, :](int16[:, :], int16, int32, int32, int32, int32, int32), nopython=True)
 def make_cell_data(band_data, missing_value, resolution_gap, bottom, top, left, right):
-    data = np.zeros((3 ** resolution_gap, 3 ** resolution_gap), dtype=np.int16)
+    data = missing_value * np.ones(
+        (3 ** resolution_gap, 3 ** resolution_gap), dtype=np.int16
+    )
     w = (right - left) / (3 ** resolution_gap)
     h = (bottom - top) / (3 ** resolution_gap)
     rng = np.arange(3 ** resolution_gap)
@@ -221,6 +223,7 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
                 north_west, north_east, south_east, south_west, north_west
             ])
             group.attrs['centre'] = np.array(cell.centroid(plane=False))
+            group.attrs['missing_value'] = np.int16(missing_val)
             group['pixel'] = pixel_value
             group.create_dataset('data', data=data, compression='szip')
 
