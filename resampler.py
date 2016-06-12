@@ -149,12 +149,16 @@ def apply_transform(transform, col, row):
 def invert_transform(transform, lon, lat):
     """Like apply_transform, but inverts the transform first so that it returns
     pixel coordinates from latitude and longitude."""
-    actual_transform = gdal.InvGeoTransform(transform)
-    assert actual_transform, 'InvGeoTransform failed'
+    result = gdal.InvGeoTransform(transform)
+    if (len(result) == 2):
+        success, actual_transform = result
+        assert success, 'InvGeoTransform failed'
+    else:
+        actual_transform = result
+        assert actual_transform, 'InvGeoTransform failed'
     # Yup, (col, row) in pixel coordinates
     px, py = gdal.ApplyGeoTransform(actual_transform, lon, lat)
     return px, py
-
 
 def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
     """ Reads a geotiff file and converts the data into a hdf5 rhealpix file """
