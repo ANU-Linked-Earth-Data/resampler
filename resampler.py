@@ -2,6 +2,7 @@
 
 from osgeo import gdal
 from osgeo import gdalconst
+from osgeo import osr
 import pytz
 from rhealpix_dggs import dggs
 import numpy as np
@@ -11,7 +12,6 @@ from argparse import ArgumentParser
 from itertools import chain
 import re
 from time import time
-
 
 # For parsing AGDC filenames
 AGDC_RE = re.compile(
@@ -23,70 +23,6 @@ AGDC_RE = re.compile(
 
 def cell_name(cell):
     return '/'.join(str(cell))
-
-# Take out the numba check if you're not cool enough to run numba :P
-from numba import jit, int16, int32
-@jit(int16[:, :](int16[:, :], int16, int32, int32, int32, int32, int32), nopython=True)
-def make_cell_data(band_data, missing_value, resolution_gap, bottom, top, left, right):
-    data = missing_value * np.ones(
-        (3 ** resolution_gap, 3 ** resolution_gap), dtype=np.int16
-    )
-    w = (right - left) / (3 ** resolution_gap)
-    h = (bottom - top) / (3 ** resolution_gap)
-    rng = np.arange(3 ** resolution_gap)
-
-    # Numba doesn't do bounds checks or support .clamp(), so we have to do this
-    # fancy stuff
-    band_width = band_data.shape[1]
-
-    lefts = (left + w*rng).astype(np.int64)
-    lefts[lefts < 0] = 0
-    # See below for explanation of *_invalid_mask
-    horiz_invalid_mask = lefts >= band_width
-    lefts[horiz_invalid_mask] = 0
-
-    rights = (left + w*(rng+1)).astype(np.int64)
-    rights[rights < 0] = 0
-    rights[rights > band_width] = band_width
-    rights[horiz_invalid_mask] = 0
-
-    band_height = band_data.shape[1]
-
-    tops = (top + h*rng).astype(np.int64)
-    tops[tops < 0] = 0
-    # Idea of *_invalid_mask is that if the top for a window is outside of the
-    # image, then we'll always get garbage. We set those tops to 0 so that they
-    # are cancelled by the "tops < bots" check below.
-    vert_invalid_mask = tops >= band_height
-    tops[vert_invalid_mask] = 0
-
-    bots = (top + h*(rng+1)).astype(np.int64)
-    bots[bots < 0] = 0
-    bots[bots > band_height] = band_height
-    # Also need to invalidate bots corresponding to tops outside the image
-    bots[vert_invalid_mask] = 0
-
-    # If we don't do this check then we end up with an exception once we call
-    # flatten() on an empty array :(
-    valid_y, = (tops < bots).nonzero()
-    valid_x, = (lefts < rights).nonzero()
-
-    for y in valid_y:
-        t_idx = tops[y]
-        b_idx = bots[y]
-        sub_data = band_data[t_idx:b_idx, :]
-        for x in valid_x:
-            l_idx = lefts[x]
-            r_idx = rights[x]
-            norm_subslice = sub_data[:, l_idx:r_idx]
-            flat_subslice = norm_subslice.flatten()
-            subslice = flat_subslice[flat_subslice != missing_value]
-            if subslice.size:
-                value = subslice.mean()
-                data[y, x] = int(value)
-
-    return data
-
 
 def parse_agdc_fn(fn):
     """Parses a filename in the format used by the AGDC Landsat archive. For
@@ -144,28 +80,52 @@ def apply_transform(transform, col, row):
     translate a column and row in an image into a longitude and latitude"""
     lon, lat = gdal.ApplyGeoTransform(transform, col, row)
     return lon, lat
+    
+rhealpix_proj4_string = "+proj=rhealpix +I +lon_0=0 +a=1 +ellps=WGS84 +npole=0 +spole=0 +wktext"
+def reproject_dataset (dataset, cell, resolution_gap):
+    """ Based on https://jgomezdans.github.io/gdal_notes/reprojection.html """
+    
+    sourceProj = osr.SpatialReference()
+    error_code = sourceProj.ImportFromWkt(dataset.GetProjection())
+    assert error_code == 0, "Dataset doesn't have a projection"
+    
+    destProj = osr.SpatialReference()
+    error_code = destProj.ImportFromProj4(rhealpix_proj4_string)
+    assert error_code == 0, "Couldn't create rHEALPix projection"
+    
+    tx = osr.CoordinateTransformation (sourceProj, destProj)
+    geo_t = dataset.GetGeoTransform ()
+    x_size = dataset.RasterXSize
+    y_size = dataset.RasterYSize
+    (ulx, uly, ulz ) = tx.TransformPoint( geo_t[0], geo_t[3])
+    (lrx, lry, lrz ) = tx.TransformPoint( geo_t[0] + geo_t[1]*x_size,geo_t[3] + geo_t[5]*y_size )
 
-
-def invert_transform(transform, lon, lat):
-    """Like apply_transform, but inverts the transform first so that it returns
-    pixel coordinates from latitude and longitude."""
-    result = gdal.InvGeoTransform(transform)
-    if (len(result) == 2):
-        success, actual_transform = result
-        assert success, 'InvGeoTransform failed'
-    else:
-        actual_transform = result
-        assert actual_transform, 'InvGeoTransform failed'
-    # Yup, (col, row) in pixel coordinates
-    px, py = gdal.ApplyGeoTransform(actual_transform, lon, lat)
-    return px, py
+    # Calculate the new geotransform
+    north_west, _, south_east, _ = cell.vertices(plane=False)
+    left, top = north_west
+    right, bottom = south_east
+    left, top, _ = tx.TransformPoint(left, top)
+    right, bottom, _ = tx.TransformPoint(right, bottom)
+    num_pixels = 3 ** resolution_gap
+    new_geo = ( left, (right - left) / num_pixels, 0, \
+                top, 0, (bottom - top) / num_pixels )
+    # Now, we create an in-memory raster
+    mem_drv = gdal.GetDriverByName('MEM')
+    dest = mem_drv.Create('', num_pixels, num_pixels, dataset.RasterCount, dataset.GetRasterBand(1).DataType)
+    dest.SetGeoTransform(new_geo)
+    dest.SetProjection(destProj.ExportToWkt())
+    
+    # Perform the projection/resampling 
+    error_code = gdal.ReprojectImage(dataset, dest, sourceProj.ExportToWkt(), destProj.ExportToWkt(), gdal.GRA_Bilinear)
+    assert error_code == 0, "Reprojection failed"
+    
+    return dest
 
 def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
     """ Reads a geotiff file and converts the data into a hdf5 rhealpix file """
     dataset = gdal.Open(filename, gdalconst.GA_ReadOnly)
     width = dataset.RasterXSize
     height = dataset.RasterYSize
-    numBands = dataset.RasterCount
     transform = dataset.GetGeoTransform()
     rddgs = dggs.RHEALPixDGGS()
     for resolution in range(0,20):
@@ -185,12 +145,7 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
         print("Can't read metadata from filename. Is it in the AGDC format?")
         tif_meta = None
 
-    print("Processing band ", band_num, "/", numBands, "...")
-    band = dataset.GetRasterBand(band_num)
-    missing_val = band.GetNoDataValue()
-    masked_data = np.ma.masked_equal(band.ReadAsArray(), missing_val)
-    # nans play nice with numba
-    band_data = band.ReadAsArray()
+    missing_val = dataset.GetRasterBand(band_num).GetNoDataValue()
     for resolution in range(outer_res, max_resolution + 1):
         print("Processing resolution ", resolution, "/", max_resolution, "...")
         upper_left = apply_transform(transform, 0, 0)
@@ -201,22 +156,15 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
         for cell in chain(*cells):
             north_west, north_east, south_east, south_west = cell.vertices(plane=False)
 
-            # Get clamped bounds in image (row/col) coordinates
-            left, top = north_west
-            right, bottom = south_east
-            left, top = map(int, invert_transform(transform, left, top))
-            right, bottom = map(int, invert_transform(transform, right, bottom))
-            l = max(0, left)
-            r = max(0, right)
-            t = max(0, top)
-            b = max(0, bottom)
-
-            pixel_value = masked_data[t:b+1,l:r+1].mean()
-            if pixel_value is np.ma.masked:
+            data_dataset = reproject_dataset(dataset, cell, resolution_gap)
+            data = data_dataset.GetRasterBand(band_num).ReadAsArray()
+            if not np.any(data):
                 continue
-
-            assert right > left and bottom > top
-            data = make_cell_data(band_data, np.int16(missing_val), resolution_gap, bottom, top, left, right)
+                
+            pixel_dataset = reproject_dataset(dataset, cell, 0)
+            pixel_value = pixel_dataset.GetRasterBand(band_num).ReadAsArray()
+            assert pixel_value.shape == (1,1)
+            pixel_value = pixel_value[0][0] # might still be zero even if the finer resolution array has valid values
 
             # Write the HDF5 group. This is much faster than writing inline,
             # and lets us use numba.
@@ -227,7 +175,7 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
                 north_west, north_east, south_east, south_west, north_west
             ])
             group.attrs['centre'] = np.array(cell.centroid(plane=False))
-            group.attrs['missing_value'] = np.int16(missing_val)
+            group.attrs['missing_value'] = 0 # Value used by gdal.ReprojectImage()
             group['pixel'] = pixel_value
             group.create_dataset('data', data=data, compression='szip')
 
