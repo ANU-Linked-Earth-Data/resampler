@@ -19,7 +19,10 @@ def show_tree(hdf5_name):
 def show_data(hdf5_name, cell, band):
     hdf5_file = h5py.File(hdf5_name, "r")
     try:
-        data = hdf5_file[cell_name(cell) + "/data"][band - 1]
+        data = hdf5_file[cell_name(cell) + "/data"]
+        if len(data.shape) == 3:
+            data = data[band - 1]
+        assert len(data.shape) == 2, "Something is wrong with the dimensions of the data"
         plt.imshow(data, interpolation='none')
         plt.show()
         print(data.shape)
