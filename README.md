@@ -13,7 +13,7 @@ virtualenv env -p "$(which python3)"
 . env/bin/activate
 # numba needs LLVM 3.7
 LLVM_CONFIG="$(which llvm-config-3.7)" pip install -r requirements.txt
-./resampler.py some-geotiff-you-downloaded.tif result.h5 2 7 5
+./resampler.py some-geotiff-you-downloaded.tif result.h5
 ```
 
 The Python 3 requirement is important! Also, you might get some issues
