@@ -4,3 +4,4 @@ env/
 *.hdf5
 *.swp
 *.h5
+*.hdf

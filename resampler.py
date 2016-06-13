@@ -122,10 +122,38 @@ def reproject_dataset (dataset, dataset_projection, cell, resolution_gap):
     assert error_code == 0, "Reprojection failed"
 
     return dest
-
-def from_file(filename, hdf5_file, max_resolution, resolution_gap):
-    """ Reads a geotiff file and converts the data into a hdf5 rhealpix file """
-    dataset = gdal.Open(filename, gdalconst.GA_ReadOnly)
+    
+def open_dataset(filename):
+    """ Reads a geotiff or a HDF4 file and returns a gdal dataset """
+    if filename.split(".")[-1] == "tif":
+        return gdal.Open(filename, gdalconst.GA_ReadOnly)
+    elif filename.split(".")[-1] == "hdf":
+        dataset = gdal.Open(filename, gdalconst.GA_ReadOnly) #Yay gdal can open MODIS hdf files! :D
+        ### But it doesn't read in the georeferencing system properly ...
+        
+        from pyhdf.SD import SD, SDC
+        hdf = SD(filename, SDC.READ)
+        latitudes = hdf.select('latitude')[:]
+        longitudes = hdf.select('longitude')[:]
+        
+        left = longitudes[0]
+        top = latitudes[0]
+        x_spacing = np.mean([longitudes[i+1] - longitudes[i] for i in range(len(longitudes)-1)])
+        y_spacing = np.mean([latitudes[i+1] - latitudes[i] for i in range(len(latitudes)-1)])
+        
+        geotransform = ( left, x_spacing, 0, \
+                top, 0, y_spacing )
+        
+        dataset.SetGeoTransform(geotransform)
+        dataset.SetProjection(wgs_84_projection.ExportToWkt()) # This will do for now
+        
+        return dataset
+    else:
+        assert False, "Invalid file extension " + filename.split(".")[-1:] + ", expected 'tif' or 'hdf'"
+        
+        
+def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
+    """ Converts a gdal dataset into a hdf5 rhealpix file """
     width = dataset.RasterXSize
     height = dataset.RasterYSize
     geotransform = dataset.GetGeoTransform()
@@ -145,8 +173,11 @@ def from_file(filename, hdf5_file, max_resolution, resolution_gap):
     upper_left = pixel_to_long_lat(geotransform, dataset_projection, 0, 0)
     lower_right = pixel_to_long_lat(geotransform, dataset_projection, width, height)
 
-    bounding_cell = rddgs.cell_from_region(upper_left, lower_right, plane=False)
-    outer_res = bounding_cell.resolution
+    try:
+        bounding_cell = rddgs.cell_from_region(upper_left, lower_right, plane=False)
+        outer_res = bounding_cell.resolution
+    except AttributeError: # dggs library produces this error, maybe when even top-level cells are too small?
+        outer_res = 0
 
     for resolution in range(outer_res, max_resolution + 1):
         print("Processing resolution ", resolution, "/", max_resolution, "...")
@@ -156,6 +187,8 @@ def from_file(filename, hdf5_file, max_resolution, resolution_gap):
         )
         for cell in chain(*cells):
             north_west, north_east, south_east, south_west = cell.vertices(plane=False)
+            if cell.region() != "equatorial":
+                continue # Yucky polar cells, ignore for now, maybe fix later
 
             data = reproject_dataset(dataset, dataset_projection, cell, resolution_gap).ReadAsArray()
             if not np.any(data):
@@ -178,7 +211,7 @@ def from_file(filename, hdf5_file, max_resolution, resolution_gap):
 
 
 parser = ArgumentParser()
-parser.add_argument('input', type=str, help='path to input GeoTIFF')
+parser.add_argument('input', type=str, help='path to input GeoTIFF or MODIS HDF4 file')
 parser.add_argument('output', type=str, help='path to output HDF5 file')
 parser.add_argument(
     '--max-res', type=int, dest='max_res', default=6,
@@ -197,10 +230,12 @@ if __name__ == "__main__":
         % (args.max_res, args.res_gap, 9 ** args.res_gap)
     )
 
+    dataset = open_dataset(args.input)
+    
     start_time = time()
     with h5py.File(args.output, "w") as hdf5_file:
         from_file(
-            args.input, hdf5_file, args.max_res, args.res_gap
+            args.input, dataset, hdf5_file, args.max_res, args.res_gap
         )
 
     elapsed = time() - start_time
