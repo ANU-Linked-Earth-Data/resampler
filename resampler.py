@@ -156,7 +156,8 @@ def from_file(filename, hdf5_file, max_resolution, resolution_gap):
             north_west, north_east, south_east, south_west = cell.vertices(plane=False)
 
             data = reproject_dataset(dataset, cell, resolution_gap).ReadAsArray()
-            assert np.any(data), "No valid pixels in cell " + str(cell) + ", possible error"
+            if not np.any(data):
+                continue
 
             pixel_value = np.array([np.mean(x[np.nonzero(x)]) for x in data])
 
