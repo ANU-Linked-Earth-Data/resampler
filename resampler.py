@@ -80,19 +80,19 @@ def apply_transform(transform, col, row):
     translate a column and row in an image into a longitude and latitude"""
     lon, lat = gdal.ApplyGeoTransform(transform, col, row)
     return lon, lat
-    
+
 rhealpix_proj4_string = "+proj=rhealpix +I +lon_0=0 +a=1 +ellps=WGS84 +npole=0 +spole=0 +wktext"
 def reproject_dataset (dataset, cell, resolution_gap):
     """ Based on https://jgomezdans.github.io/gdal_notes/reprojection.html """
-    
+
     sourceProj = osr.SpatialReference()
     error_code = sourceProj.ImportFromWkt(dataset.GetProjection())
     assert error_code == 0, "Dataset doesn't have a projection"
-    
+
     destProj = osr.SpatialReference()
     error_code = destProj.ImportFromProj4(rhealpix_proj4_string)
     assert error_code == 0, "Couldn't create rHEALPix projection"
-    
+
     tx = osr.CoordinateTransformation (sourceProj, destProj)
     geo_t = dataset.GetGeoTransform ()
     x_size = dataset.RasterXSize
@@ -114,14 +114,14 @@ def reproject_dataset (dataset, cell, resolution_gap):
     dest = mem_drv.Create('', num_pixels, num_pixels, dataset.RasterCount, dataset.GetRasterBand(1).DataType)
     dest.SetGeoTransform(new_geo)
     dest.SetProjection(destProj.ExportToWkt())
-    
-    # Perform the projection/resampling 
+
+    # Perform the projection/resampling
     error_code = gdal.ReprojectImage(dataset, dest, sourceProj.ExportToWkt(), destProj.ExportToWkt(), gdal.GRA_Bilinear)
     assert error_code == 0, "Reprojection failed"
-    
+
     return dest
 
-def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
+def from_file(filename, hdf5_file, max_resolution, resolution_gap):
     """ Reads a geotiff file and converts the data into a hdf5 rhealpix file """
     dataset = gdal.Open(filename, gdalconst.GA_ReadOnly)
     width = dataset.RasterXSize
@@ -145,7 +145,6 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
         print("Can't read metadata from filename. Is it in the AGDC format?")
         tif_meta = None
 
-    missing_val = dataset.GetRasterBand(band_num).GetNoDataValue()
     for resolution in range(outer_res, max_resolution + 1):
         print("Processing resolution ", resolution, "/", max_resolution, "...")
         upper_left = apply_transform(transform, 0, 0)
@@ -156,15 +155,10 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
         for cell in chain(*cells):
             north_west, north_east, south_east, south_west = cell.vertices(plane=False)
 
-            data_dataset = reproject_dataset(dataset, cell, resolution_gap)
-            data = data_dataset.GetRasterBand(band_num).ReadAsArray()
-            if not np.any(data):
-                continue
-                
-            pixel_dataset = reproject_dataset(dataset, cell, 0)
-            pixel_value = pixel_dataset.GetRasterBand(band_num).ReadAsArray()
-            assert pixel_value.shape == (1,1)
-            pixel_value = pixel_value[0][0] # might still be zero even if the finer resolution array has valid values
+            data = reproject_dataset(dataset, cell, resolution_gap).ReadAsArray()
+            assert np.any(data), "No valid pixels in cell " + str(cell) + ", possible error"
+
+            pixel_value = np.array([np.mean(x[np.nonzero(x)]) for x in data])
 
             # Write the HDF5 group. This is much faster than writing inline,
             # and lets us use numba.
@@ -184,9 +178,6 @@ parser = ArgumentParser()
 parser.add_argument('input', type=str, help='path to input GeoTIFF')
 parser.add_argument('output', type=str, help='path to output HDF5 file')
 parser.add_argument(
-    '--band', type=int, default=2, help='band from GeoTIFF to resample'
-)
-parser.add_argument(
     '--max-res', type=int, dest='max_res', default=6,
     help='maximum DGGS depth to resample at'
 )
@@ -200,14 +191,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print('Reading from %s and writing to %s' % (args.input, args.output))
     print(
-        'Resampling band %i to depth %i with gap %i (so %i pixels per tile)'
-        % (args.band, args.max_res, args.res_gap, 9 ** args.res_gap)
+        'Resampling to depth %i with gap %i (so %i pixels per tile)'
+        % (args.max_res, args.res_gap, 9 ** args.res_gap)
     )
 
     start_time = time()
     with h5py.File(args.output, "w") as hdf5_file:
         from_file(
-            args.input, hdf5_file, args.band, args.max_res, args.res_gap
+            args.input, hdf5_file, args.max_res, args.res_gap
         )
 
     elapsed = time() - start_time
