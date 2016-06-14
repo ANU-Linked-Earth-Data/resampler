@@ -75,37 +75,39 @@ def add_meta(metadata, group):
     return group
 
 
-def apply_transform(transform, col, row):
-    """Take a transform from GDAL's ``GetGeoTransform`` and apply it to
-    translate a column and row in an image into a longitude and latitude"""
-    lon, lat = gdal.ApplyGeoTransform(transform, col, row)
+def pixel_to_long_lat(geotransform, dataset_projection, col, row):
+    """ Given a pixel position as a column/row, calculates its position in the dataset's reference system,
+        then converts it to a latitude and longitude in the WGS_84 system """
+    tx = osr.CoordinateTransformation (dataset_projection, wgs_84_projection)
+    lon, lat, height = tx.TransformPoint(*gdal.ApplyGeoTransform(geotransform, col, row))
     return lon, lat
-    
+
+
 rhealpix_proj4_string = "+proj=rhealpix +I +lon_0=0 +a=1 +ellps=WGS84 +npole=0 +spole=0 +wktext"
-def reproject_dataset (dataset, cell, resolution_gap):
+
+rhealpix_projection = osr.SpatialReference()
+rhealpix_projection.ImportFromProj4(rhealpix_proj4_string)
+
+wgs_84_projection = osr.SpatialReference()
+wgs_84_projection.ImportFromEPSG(4326)
+
+def reproject_dataset (dataset, dataset_projection, cell, resolution_gap):
     """ Based on https://jgomezdans.github.io/gdal_notes/reprojection.html """
+    data_to_rhealpix = osr.CoordinateTransformation (dataset_projection, rhealpix_projection)
+    lonlat_to_rhealpix = osr.CoordinateTransformation (wgs_84_projection, rhealpix_projection)
     
-    sourceProj = osr.SpatialReference()
-    error_code = sourceProj.ImportFromWkt(dataset.GetProjection())
-    assert error_code == 0, "Dataset doesn't have a projection"
-    
-    destProj = osr.SpatialReference()
-    error_code = destProj.ImportFromProj4(rhealpix_proj4_string)
-    assert error_code == 0, "Couldn't create rHEALPix projection"
-    
-    tx = osr.CoordinateTransformation (sourceProj, destProj)
-    geo_t = dataset.GetGeoTransform ()
+    geo_t = dataset.GetGeoTransform()
     x_size = dataset.RasterXSize
     y_size = dataset.RasterYSize
-    (ulx, uly, ulz ) = tx.TransformPoint( geo_t[0], geo_t[3])
-    (lrx, lry, lrz ) = tx.TransformPoint( geo_t[0] + geo_t[1]*x_size,geo_t[3] + geo_t[5]*y_size )
+    (ulx, uly, ulz ) = data_to_rhealpix.TransformPoint( geo_t[0], geo_t[3])
+    (lrx, lry, lrz ) = data_to_rhealpix.TransformPoint( geo_t[0] + geo_t[1]*x_size,geo_t[3] + geo_t[5]*y_size )
 
     # Calculate the new geotransform
     north_west, _, south_east, _ = cell.vertices(plane=False)
     left, top = north_west
     right, bottom = south_east
-    left, top, _ = tx.TransformPoint(left, top)
-    right, bottom, _ = tx.TransformPoint(right, bottom)
+    left, top, _ = lonlat_to_rhealpix.TransformPoint(left, top)
+    right, bottom, _ = lonlat_to_rhealpix.TransformPoint(right, bottom)
     num_pixels = 3 ** resolution_gap
     new_geo = ( left, (right - left) / num_pixels, 0, \
                 top, 0, (bottom - top) / num_pixels )
@@ -113,30 +115,53 @@ def reproject_dataset (dataset, cell, resolution_gap):
     mem_drv = gdal.GetDriverByName('MEM')
     dest = mem_drv.Create('', num_pixels, num_pixels, dataset.RasterCount, dataset.GetRasterBand(1).DataType)
     dest.SetGeoTransform(new_geo)
-    dest.SetProjection(destProj.ExportToWkt())
-    
-    # Perform the projection/resampling 
-    error_code = gdal.ReprojectImage(dataset, dest, sourceProj.ExportToWkt(), destProj.ExportToWkt(), gdal.GRA_Bilinear)
-    assert error_code == 0, "Reprojection failed"
-    
-    return dest
+    dest.SetProjection(rhealpix_projection.ExportToWkt())
 
-def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
-    """ Reads a geotiff file and converts the data into a hdf5 rhealpix file """
-    dataset = gdal.Open(filename, gdalconst.GA_ReadOnly)
+    # Perform the projection/resampling
+    error_code = gdal.ReprojectImage(dataset, dest, dataset_projection.ExportToWkt(), rhealpix_projection.ExportToWkt(), gdal.GRA_Bilinear)
+    assert error_code == 0, "Reprojection failed"
+
+    return dest
+    
+def open_dataset(filename):
+    """ Reads a geotiff or a HDF4 file and returns a gdal dataset """
+    if filename.split(".")[-1] == "tif":
+        return gdal.Open(filename, gdalconst.GA_ReadOnly)
+    elif filename.split(".")[-1] == "hdf":
+        dataset = gdal.Open(filename, gdalconst.GA_ReadOnly) #Yay gdal can open MODIS hdf files! :D
+        ### But it doesn't read in the georeferencing system properly ...
+        
+        from pyhdf.SD import SD, SDC
+        hdf = SD(filename, SDC.READ)
+        latitudes = hdf.select('latitude')[:]
+        longitudes = hdf.select('longitude')[:]
+        
+        left = longitudes[0]
+        top = latitudes[0]
+        x_spacing = np.mean([longitudes[i+1] - longitudes[i] for i in range(len(longitudes)-1)])
+        y_spacing = np.mean([latitudes[i+1] - latitudes[i] for i in range(len(latitudes)-1)])
+        
+        geotransform = ( left, x_spacing, 0, \
+                top, 0, y_spacing )
+        
+        dataset.SetGeoTransform(geotransform)
+        dataset.SetProjection(wgs_84_projection.ExportToWkt()) # This will do for now
+        
+        return dataset
+    else:
+        assert False, "Invalid file extension " + filename.split(".")[-1:] + ", expected 'tif' or 'hdf'"
+        
+        
+def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
+    """ Converts a gdal dataset into a hdf5 rhealpix file """
     width = dataset.RasterXSize
     height = dataset.RasterYSize
-    transform = dataset.GetGeoTransform()
+    geotransform = dataset.GetGeoTransform()
     rddgs = dggs.RHEALPixDGGS()
-    for resolution in range(0,20):
-        upper_left = apply_transform(transform, 0, 0)
-        lower_right = apply_transform(transform, width, height)
-        cells = rddgs.cells_from_region(
-            resolution, upper_left, lower_right, plane=False
-        )
-        if len(cells) > 1:
-            outer_res = resolution - 1
-            break
+
+    dataset_projection = osr.SpatialReference()
+    error_code = dataset_projection.ImportFromWkt(dataset.GetProjection())
+    assert error_code == 0, "Dataset doesn't have a projection"
 
     try:
         tif_meta = parse_agdc_fn(filename)
@@ -145,27 +170,32 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
         print("Can't read metadata from filename. Is it in the AGDC format?")
         tif_meta = None
 
-    missing_val = dataset.GetRasterBand(band_num).GetNoDataValue()
+    upper_left = pixel_to_long_lat(geotransform, dataset_projection, 0, 0)
+    lower_right = pixel_to_long_lat(geotransform, dataset_projection, width, height)
+
+    try:
+        bounding_cell = rddgs.cell_from_region(upper_left, lower_right, plane=False)
+        outer_res = bounding_cell.resolution
+    except AttributeError: # dggs library produces this error, maybe when even top-level cells are too small?
+        outer_res = 0
+
     for resolution in range(outer_res, max_resolution + 1):
         print("Processing resolution ", resolution, "/", max_resolution, "...")
-        upper_left = apply_transform(transform, 0, 0)
-        lower_right = apply_transform(transform, width, height)
+
         cells = rddgs.cells_from_region(
             resolution, upper_left, lower_right, plane=False
         )
         for cell in chain(*cells):
             north_west, north_east, south_east, south_west = cell.vertices(plane=False)
+            if cell.region() != "equatorial":
+                continue # Yucky polar cells, ignore for now, maybe fix later
 
-            data_dataset = reproject_dataset(dataset, cell, resolution_gap)
-            data = data_dataset.GetRasterBand(band_num).ReadAsArray()
+            data = reproject_dataset(dataset, dataset_projection, cell, resolution_gap).ReadAsArray()
             if not np.any(data):
                 continue
                 
-            pixel_dataset = reproject_dataset(dataset, cell, 0)
-            pixel_value = pixel_dataset.GetRasterBand(band_num).ReadAsArray()
-            assert pixel_value.shape == (1,1)
-            pixel_value = pixel_value[0][0] # might still be zero even if the finer resolution array has valid values
-
+            pixel_value = np.array([(np.mean(x[np.nonzero(x)]) if np.any(x[np.nonzero(x)]) else 0) for x in data])
+            
             # Write the HDF5 group. This is much faster than writing inline,
             # and lets us use numba.
             group = hdf5_file.create_group(cell_name(cell))
@@ -181,11 +211,8 @@ def from_file(filename, hdf5_file, band_num, max_resolution, resolution_gap):
 
 
 parser = ArgumentParser()
-parser.add_argument('input', type=str, help='path to input GeoTIFF')
+parser.add_argument('input', type=str, help='path to input GeoTIFF or MODIS HDF4 file')
 parser.add_argument('output', type=str, help='path to output HDF5 file')
-parser.add_argument(
-    '--band', type=int, default=2, help='band from GeoTIFF to resample'
-)
 parser.add_argument(
     '--max-res', type=int, dest='max_res', default=6,
     help='maximum DGGS depth to resample at'
@@ -195,19 +222,20 @@ parser.add_argument(
     help='number of DGGS levels to go down when generating tile data'
 )
 
-
 if __name__ == "__main__":
     args = parser.parse_args()
     print('Reading from %s and writing to %s' % (args.input, args.output))
     print(
-        'Resampling band %i to depth %i with gap %i (so %i pixels per tile)'
-        % (args.band, args.max_res, args.res_gap, 9 ** args.res_gap)
+        'Resampling to depth %i with gap %i (so %i pixels per tile)'
+        % (args.max_res, args.res_gap, 9 ** args.res_gap)
     )
 
+    dataset = open_dataset(args.input)
+    
     start_time = time()
     with h5py.File(args.output, "w") as hdf5_file:
         from_file(
-            args.input, hdf5_file, args.band, args.max_res, args.res_gap
+            args.input, dataset, hdf5_file, args.max_res, args.res_gap
         )
 
     elapsed = time() - start_time

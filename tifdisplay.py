@@ -7,8 +7,6 @@ import sys
 def show_data(tif_name, band_num):
     dataset = gdal.Open(tif_name, gdalconst.GA_ReadOnly)
     band = dataset.GetRasterBand(band_num)
-    missing_val = band.GetNoDataValue()
-    #masked_data = np.ma.masked_equal(band.ReadAsArray(), missing_val)
     band_data = band.ReadAsArray()
     plt.imshow(band_data, interpolation='none')
     plt.show()
