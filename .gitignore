@@ -5,3 +5,5 @@ env/
 *.swp
 *.h5
 *.hdf
+# Good place for scratch
+data/
