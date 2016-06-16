@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
-from osgeo import gdal
-from osgeo import gdalconst
-from osgeo import osr
+from osgeo import gdal, gdalconst, osr
 import pytz
 from rhealpix_dggs import dggs
 import numpy as np
@@ -10,14 +8,15 @@ import h5py
 
 from argparse import ArgumentParser
 from itertools import chain
+from os.path import basename
 import re
 from time import time
 
 # For parsing AGDC filenames
 AGDC_RE = re.compile(
-    r'^(?P<sat_id>[^_]+)_(?P<sensor_id>[^1234567890]+)_(?P<prod_code>[^_1234567890]+)_'
-    r'(?P<lon>[-0123456789]+)_(?P<lat>[^_]+)_(?P<year>\d{4})-(?P<month>\d{2})-'
-    r'(?P<day>\d{2})T(?P<hour>\d+)-(?P<minute>\d+)-(?P<second>\d+(\.\d+)?)'
+    r'^(?P<sat_id>[^_]+)_(?P<sensor_id>ETM|OLI_TIRS)_(?P<prod_code>[^_]+)_'
+    r'(?P<lon>[^_]+)_(?P<lat>[^_]+)_(?P<year>\d+)-(?P<month>\d+)-'
+    r'(?P<day>\d+)T(?P<hour>\d+)-(?P<minute>\d+)-(?P<second>\d+(\.\d+)?)'
     r'\.tif$'
 )
 
@@ -55,11 +54,12 @@ def parse_agdc_fn(fn):
         hour=int(info['hour']), minute=int(info['minute']),
         second=int_sec, microsecond=microsecond, tzinfo=pytz.utc
     )
-    return {
+    rv = {
         'lat': float(info['lat']), 'lon': float(info['lon']), 'datetime': dt,
         'prod_code': info['prod_code'], 'sensor_id': info['sensor_id'],
         'sat_id': info['sat_id']
     }
+    return rv
 
 
 def add_meta(metadata, group):
@@ -164,7 +164,7 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
     assert error_code == 0, "Dataset doesn't have a projection"
 
     try:
-        tif_meta = parse_agdc_fn(filename)
+        tif_meta = parse_agdc_fn(basename(filename))
         add_meta(tif_meta, hdf5_file)
     except ValueError:
         print("Can't read metadata from filename. Is it in the AGDC format?")
