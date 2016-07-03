@@ -129,6 +129,13 @@ def open_dataset(filename):
         return gdal.Open(filename, gdalconst.GA_ReadOnly)
     elif filename.split(".")[-1] == "hdf":
         dataset = gdal.Open(filename, gdalconst.GA_ReadOnly) #Yay gdal can open MODIS hdf files! :D
+        meta = dataset.GetMetadata()
+        assert '_FillValue' in meta
+        fill_value = meta['_FillValue']
+        band = dataset.GetRasterBand(1)
+        band.SetNoDataValue(float(fill_value))
+        
+        
         ### But it doesn't read in the georeferencing system properly ...
         
         from pyhdf.SD import SD, SDC
