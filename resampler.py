@@ -123,6 +123,15 @@ def reproject_dataset (dataset, dataset_projection, cell, resolution_gap):
 
     return dest
     
+SINU_WKT = 'PROJCS["Sinusoidal_Sanson_Flamsteed",GEOGCS["GCS_Unknown",' \
+           'DATUM["D_unknown",SPHEROID["Unknown",6371007.181,"inf"]],' \
+           'PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]]' \
+           ',PROJECTION["Sinusoidal"],PARAMETER["central_meridian",0],' \
+           'PARAMETER["false_easting",0],PARAMETER["false_northing",0]' \
+           ',UNIT["Meter",1]]'
+modis_projection = osr.SpatialReference()
+modis_projection.ImportFromWkt(SINU_WKT)
+    
 def open_dataset(filename):
     """ Reads a geotiff or a HDF4 file and returns a gdal dataset """
     if filename.split(".")[-1] == "tif":
@@ -135,24 +144,44 @@ def open_dataset(filename):
         band = dataset.GetRasterBand(1)
         band.SetNoDataValue(float(fill_value))
         
-        
         ### But it doesn't read in the georeferencing system properly ...
         
-        from pyhdf.SD import SD, SDC
+        '''from pyhdf.SD import SD, SDC
         hdf = SD(filename, SDC.READ)
         latitudes = hdf.select('latitude')[:]
         longitudes = hdf.select('longitude')[:]
         
         left = longitudes[0]
         top = latitudes[0]
+        right = longitudes[-1]
+        bottom = latitudes[-1]
+        
         x_spacing = np.mean([longitudes[i+1] - longitudes[i] for i in range(len(longitudes)-1)])
         y_spacing = np.mean([latitudes[i+1] - latitudes[i] for i in range(len(latitudes)-1)])
+        '''
+        
+        # Seriously, who stores metadata as a string with escaped literals in it????
+        # These are copied from the MODIS file of interest:
+        CHARACTERISTICBINSIZE500M = 463.312716527778
+        #UpperLeftPointMtrs=(10007554.677000,-1111950.519667)
+        #LowerRightMtrs=(16679257.795000,-5559752.598333)
+        
+        NORTHBOUNDINGCOORDINATE = -10.0000009973059
+        #SOUTHBOUNDINGCOORDINATE = -50.0000009964079
+        #EASTBOUNDINGCOORDINATE = 180.000000983105
+        WESTBOUNDINGCOORDINATE = 95.7760004589305
+    
+        tx = osr.CoordinateTransformation (wgs_84_projection, modis_projection)
+        left, top, _ = tx.TransformPoint(WESTBOUNDINGCOORDINATE, NORTHBOUNDINGCOORDINATE)
+        #right, bottom, _ = tx.TransformPoint(EASTBOUNDINGCOORDINATE, SOUTHBOUNDINGCOORDINATE)
+        x_spacing = CHARACTERISTICBINSIZE500M
+        y_spacing = -CHARACTERISTICBINSIZE500M
         
         geotransform = ( left, x_spacing, 0, \
                 top, 0, y_spacing )
         
         dataset.SetGeoTransform(geotransform)
-        dataset.SetProjection(wgs_84_projection.ExportToWkt()) # This will do for now
+        dataset.SetProjection(SINU_WKT)
         
         return dataset
     else:
@@ -179,6 +208,8 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
 
     upper_left = pixel_to_long_lat(geotransform, dataset_projection, 0, 0)
     lower_right = pixel_to_long_lat(geotransform, dataset_projection, width, height)
+    
+    print(geotransform, upper_left, lower_right)
 
     try:
         bounding_cell = rddgs.cell_from_region(upper_left, lower_right, plane=False)
