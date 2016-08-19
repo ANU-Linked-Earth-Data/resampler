@@ -255,6 +255,9 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
                 'missing_value'] = 0  # Value used by gdal.ReprojectImage()
             group['pixel'] = pixel_value
 
+            if len(data.shape) == 2:
+                data = np.array([data])
+                
             for band_num in range(data.shape[0]):
                 # Write out each band as a separate PNG
                 band_data = data[band_num]
