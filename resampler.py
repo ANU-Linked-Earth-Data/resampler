@@ -242,8 +242,8 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
                                      if np.any(x[np.nonzero(x)]) else 0)
                                     for x in data])
 
-            # Write the HDF5 group. This is much faster than writing inline,
-            # and lets us use numba.
+            # Write the HDF5 group in one go. This is faster than manipulating
+            # the dataset directly.
             group = hdf5_file.create_group(cell_name(cell))
             if tif_meta is not None:
                 add_meta(tif_meta, group)
@@ -261,7 +261,11 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
                 out_bytes = BytesIO()
                 imsave(out_bytes, band_data, format='png')
                 ds_name = 'png_band_%i' % band_num
-                group[ds_name] = np.void(out_bytes.getvalue())
+                # H5T_OPAQUE (maps to np.void in h5py) doesn't work in JHDF5,
+                # so we use an unsigned byte array for this (actually binary)
+                # data.
+                group[ds_name] = np.frombuffer(out_bytes.getbuffer(),
+                                               dtype='uint8')
 
 
 parser = ArgumentParser()

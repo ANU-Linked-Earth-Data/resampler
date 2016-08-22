@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import h5py
-import sys
+from io import BytesIO
+from scipy.ndimage import imread
+
 from argparse import ArgumentParser
 
 def cell_name(cell):
@@ -17,17 +19,14 @@ def show_tree(hdf5_name):
         hdf5_file.close()
 
 def show_data(hdf5_name, cell, band):
-    hdf5_file = h5py.File(hdf5_name, "r")
-    try:
-        data = hdf5_file[cell_name(cell) + "/data"]
-        if len(data.shape) == 3:
-            data = data[band - 1]
-        assert len(data.shape) == 2, "Something is wrong with the dimensions of the data"
+    with h5py.File(hdf5_name, "r") as hdf5_file:
+        ds_name = '%s/png_band_%i' % (cell_name(cell), band)
+        # .data is possibly unsafe? Pretty sure endianness and layout don't
+        # matter for *this* dataset, but could be wrong.
+        png_data = BytesIO(hdf5_file[ds_name].value.data)
+        data = imread(png_data)
         plt.imshow(data, interpolation='none')
         plt.show()
-        print(data.shape)
-    finally:
-        hdf5_file.close()
 
 def init_pyplot():
     import matplotlib as mpl
