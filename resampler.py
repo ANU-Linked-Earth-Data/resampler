@@ -251,13 +251,15 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
                 north_west, north_east, south_east, south_west, north_west
             ])
             group.attrs['centre'] = np.array(cell.centroid(plane=False))
-            group.attrs[
-                'missing_value'] = 0  # Value used by gdal.ReprojectImage()
+            # Value used by gdal.ReprojectImage()
+            group.attrs['missing_value'] = 0
             group['pixel'] = pixel_value
 
             if len(data.shape) == 2:
                 data = np.array([data])
-                
+
+            group.attrs['tile_size'] = data.shape[1]
+
             for band_num in range(data.shape[0]):
                 # Write out each band as a separate PNG
                 band_data = data[band_num]
