@@ -7,11 +7,12 @@ import numpy as np
 from scipy.misc import imsave
 import h5py
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, FileType
 from itertools import chain
 from io import BytesIO
 from os.path import basename
 import re
+import sys
 from time import time
 
 # For parsing AGDC filenames
@@ -69,19 +70,6 @@ def parse_agdc_fn(fn):
         'sat_id': info['sat_id']
     }
     return rv
-
-
-def add_meta(metadata, group):
-    """Add metadata, probably AGDC-related (e.g. acquisition time, satellite
-    ID), to an HDF5 group."""
-    for k, v in metadata.items():
-        if isinstance(v, pytz.datetime.datetime):
-            enc_v = v.isoformat()
-        else:
-            # Hope for the best!
-            enc_v = v
-        group.attrs[k] = enc_v
-    return group
 
 
 def pixel_to_long_lat(geotransform, dataset_projection, col, row):
@@ -186,7 +174,8 @@ def open_dataset(filename):
             -1:] + ", expected 'tif' or 'hdf'"
 
 
-def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
+def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
+              ds_name, timestamp):
     """ Converts a gdal dataset into a hdf5 rhealpix file """
     width = dataset.RasterXSize
     height = dataset.RasterYSize
@@ -196,13 +185,6 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
     dataset_projection = osr.SpatialReference()
     error_code = dataset_projection.ImportFromWkt(dataset.GetProjection())
     assert error_code == 0, "Dataset doesn't have a projection"
-
-    try:
-        tif_meta = parse_agdc_fn(basename(filename))
-        add_meta(tif_meta, hdf5_file)
-    except ValueError:
-        print("Can't read metadata from filename. Is it in the AGDC format?")
-        tif_meta = None
 
     upper_left = pixel_to_long_lat(geotransform, dataset_projection, 0, 0)
     lower_right = pixel_to_long_lat(geotransform, dataset_projection, width,
@@ -219,6 +201,9 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
         # dggs library produces this error, maybe when even top-level cells are
         # too small?
         outer_res = 0
+
+    # Time suffix will be appended to each "pixel" and "png_band_<n>" record
+    time_suffix = '@' + timestamp.isoformat()
 
     for resolution in range(outer_res, max_resolution + 1):
         print("Processing resolution ", resolution, "/", max_resolution, "...")
@@ -244,33 +229,29 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap):
 
             # Write the HDF5 group in one go. This is faster than manipulating
             # the dataset directly.
-            group = hdf5_file.create_group(cell_name(cell))
-            if tif_meta is not None:
-                add_meta(tif_meta, group)
-            group.attrs['bounds'] = np.array([
+            cell_group = hdf5_file.create_group(cell_name(cell))
+            cell_group.attrs['bounds'] = np.array([
                 north_west, north_east, south_east, south_west, north_west
             ])
-            group.attrs['centre'] = np.array(cell.centroid(plane=False))
-            # Value used by gdal.ReprojectImage()
-            group.attrs['missing_value'] = 0
-            group['pixel'] = pixel_value
+            cell_group.attrs['centre'] = np.array(cell.centroid(plane=False))
+
+            ds_group = cell_group.create_group(ds_name)
+            ds_group['pixel' + time_suffix] = pixel_value
 
             if len(data.shape) == 2:
                 data = np.array([data])
-
-            group.attrs['tile_size'] = data.shape[1]
 
             for band_num in range(data.shape[0]):
                 # Write out each band as a separate PNG
                 band_data = data[band_num]
                 out_bytes = BytesIO()
                 imsave(out_bytes, band_data, format='png')
-                ds_name = 'png_band_%i' % band_num
+                png_ds_name = ('png_band_%i' % band_num) + time_suffix
                 # H5T_OPAQUE (maps to np.void in h5py) doesn't work in JHDF5,
                 # so we use an unsigned byte array for this (actually binary)
                 # data.
-                group[ds_name] = np.frombuffer(out_bytes.getbuffer(),
-                                               dtype='uint8')
+                ds_group[png_ds_name] = np.frombuffer(out_bytes.getbuffer(),
+                                                      dtype='uint8')
 
 
 parser = ArgumentParser()
@@ -283,6 +264,15 @@ parser.add_argument('--max-res',
                     dest='max_res',
                     default=6,
                     help='maximum DGGS depth to resample at')
+parser.add_argument('--ds-name',
+                    type=str,
+                    dest='ds_name',
+                    default=None,
+                    help='internal name for the new dataset')
+parser.add_argument('--attributes',
+                    type=FileType('r'),
+                    default=None,
+                    help='.ttl file containing qb:Attributes for the dataset')
 parser.add_argument(
     '--res-gap',
     type=int,
@@ -297,10 +287,36 @@ if __name__ == "__main__":
           (args.max_res, args.res_gap, 9**args.res_gap))
 
     dataset = open_dataset(args.input)
+    ds_name = args.ds_name
+    try:
+        tif_meta = parse_agdc_fn(basename(args.input))
+        timestamp = tif_meta['datetime']
+        if ds_name is None:
+            ds_name = '{sat_id}_{sensor_id}_{prod_code}'.format(**tif_meta)
+    except ValueError:
+        print("Could not parse filename. Is it in the AGDC format?",
+              file=sys.stderr)
+        if ds_name is None:
+            ds_name = 'unknown'
+        # give dataset a stupid timestamp just to spite the user
+        timestamp = pytz.datetime.datetime(1923, 6, 4, tzinfo=pytz.UTC)
+
+    print('Using dataset name "%s" and timestamp "%s"' % (ds_name, timestamp))
 
     start_time = time()
     with h5py.File(args.output, "w") as hdf5_file:
-        from_file(args.input, dataset, hdf5_file, args.max_res, args.res_gap)
+        # from_file() creates the general DGGS structure (but not top-level
+        # metadata)
+        from_file(args.input, dataset, hdf5_file, args.max_res, args.res_gap,
+                  ds_name, timestamp)
+
+        # this adds metadata into the top level of the file
+        if args.attributes is not None:
+            attr_ttl = args.attributes.read().encode('utf8')
+        else:
+            attr_ttl = b''
+        hdf5_file['/dataset/' + ds_name] = np.frombuffer(attr_ttl,
+                                                         dtype='uint8')
 
     elapsed = time() - start_time
     print("Done! Took %.2fs" % elapsed)
