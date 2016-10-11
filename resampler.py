@@ -205,6 +205,9 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
     # Time suffix will be appended to each "pixel" and "png_band_<n>" record
     time_suffix = '@' + timestamp.isoformat()
 
+    # Will return this later
+    num_bands = None
+
     for resolution in range(outer_res, max_resolution + 1):
         print("Processing resolution ", resolution, "/", max_resolution, "...")
 
@@ -226,6 +229,7 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
             pixel_value = np.array([(np.mean(x[np.nonzero(x)])
                                      if np.any(x[np.nonzero(x)]) else 0)
                                     for x in data])
+            num_bands = pixel_value.size
 
             # Write the HDF5 group in one go. This is faster than manipulating
             # the dataset directly.
@@ -252,6 +256,8 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
                 # data.
                 ds_group[png_ds_name] = np.frombuffer(out_bytes.getbuffer(),
                                                       dtype='uint8')
+
+    return num_bands
 
 
 parser = ArgumentParser()
@@ -307,16 +313,18 @@ if __name__ == "__main__":
     with h5py.File(args.output, "w") as hdf5_file:
         # from_file() creates the general DGGS structure (but not top-level
         # metadata)
-        from_file(args.input, dataset, hdf5_file, args.max_res, args.res_gap,
-                  ds_name, timestamp)
+        num_bands = from_file(args.input, dataset, hdf5_file, args.max_res,
+                              args.res_gap, ds_name, timestamp)
 
         # this adds metadata into the top level of the file
         if args.attributes is not None:
             attr_ttl = args.attributes.read().encode('utf8')
         else:
             attr_ttl = b''
-        hdf5_file['/dataset/' + ds_name] = np.frombuffer(attr_ttl,
-                                                         dtype='uint8')
+        name_pre = '/products/' + ds_name
+        hdf5_file[name_pre + '/meta'] = np.frombuffer(attr_ttl, dtype='uint8')
+        hdf5_file[name_pre + '/numbands'] = num_bands
+        hdf5_file[name_pre + '/tilesize'] = 3 ** args.res_gap
 
     elapsed = time() - start_time
     print("Done! Took %.2fs" % elapsed)
