@@ -174,6 +174,13 @@ def open_dataset(filename):
             -1:] + ", expected 'tif' or 'hdf'"
 
 
+def time_format(timestamp):
+    """Imitate Java's DateTimeFormatter.ISO_INSTANT style for datetimes. It's
+    not exactly ISO_INSTANT, because we're truncating to second precision."""
+    as_utc = timestamp.astimezone(pytz.UTC)
+    return as_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
 def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
               ds_name, timestamp):
     """ Converts a gdal dataset into a hdf5 rhealpix file """
@@ -203,7 +210,7 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
         outer_res = 0
 
     # Time suffix will be appended to each "pixel" and "png_band_<n>" record
-    time_suffix = '@' + timestamp.isoformat()
+    time_suffix = '@' + time_format(timestamp)
 
     # Will return this later
     num_bands = None
