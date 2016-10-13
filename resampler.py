@@ -325,11 +325,14 @@ if __name__ == "__main__":
 
         # this adds metadata into the top level of the file
         if args.attributes is not None:
-            attr_ttl = args.attributes.read().encode('utf8')
+            attr_ttl = args.attributes.read()
         else:
-            attr_ttl = b''
+            attr_ttl = ''
         name_pre = '/products/' + ds_name
-        hdf5_file[name_pre + '/meta'] = np.frombuffer(attr_ttl, dtype='uint8')
+        # Was using np.frombuffer(attr_ttl.encode('utf-8'), dtype='uint8'), but
+        # I think it makes more sense to store this (non-binary) data as a
+        # H5T_STRING.
+        hdf5_file[name_pre + '/meta'] = attr_ttl
         hdf5_file[name_pre + '/numbands'] = num_bands
         hdf5_file[name_pre + '/tilesize'] = 3**args.res_gap
 
