@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Script to join two HDF5 files together, copying datasets from one into the
+other. Conflicts are reported but otherwise ignored; the destination file
+always wins."""
+
+import h5py
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('source', type=str, help='input HDF5 file')
+parser.add_argument('destination',
+                    type=str,
+                    help='output HDF5 file (must exist)')
+
+
+def merge_into(in_h5, out_h5):
+    def visitor(path, item):
+        if isinstance(item, h5py.Dataset):
+            # Copy the dataset straight over
+            if path not in out_h5:
+                out_h5[path] = item.value
+            else:
+                print('Not overwriting object at %s' % path)
+        elif isinstance(item, h5py.Group):
+            # Make the group if it doesn't exist and copy over any attributes
+            group = out_h5.get(path, None)
+            if group is None:
+                group = out_h5.create_group(path)
+            for attr_key, attr_val in item.attrs.items():
+                if attr_key not in group.attrs:
+                    group.attrs[attr_key] = attr_val
+        else:
+            print('Unknown object at %s: %s' % (path, item))
+
+    in_h5.visititems(visitor)
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    with h5py.File(args.source, 'r') as in_fp:
+        with h5py.File(args.destination, 'r+') as out_fp:
+            merge_into(in_fp, out_fp)
