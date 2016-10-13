@@ -10,7 +10,7 @@ import h5py
 from argparse import ArgumentParser, FileType
 from itertools import chain
 from io import BytesIO
-from os.path import basename
+from os.path import basename, splitext
 import re
 import sys
 from time import time
@@ -133,12 +133,12 @@ def reproject_dataset(dataset, dataset_projection, cell, resolution_gap):
 
 def open_dataset(filename):
     """ Reads a geotiff or a HDF4 file and returns a gdal dataset """
-    if filename.split(".")[-1] == "tif":
+    _, extension = splitext(filename)
+    if extension == "tif":
         return gdal.Open(filename, gdalconst.GA_ReadOnly)
-    elif filename.split(".")[-1] == "hdf":
-        dataset = gdal.Open(
-            filename,
-            gdalconst.GA_ReadOnly)  # Yay gdal can open MODIS hdf files! :D
+    elif extension == "hdf":
+        # Yay gdal can open MODIS hdf files! :D
+        dataset = gdal.Open(filename, gdalconst.GA_ReadOnly)
         meta = dataset.GetMetadata()
         assert '_FillValue' in meta
         fill_value = meta['_FillValue']
@@ -146,7 +146,6 @@ def open_dataset(filename):
         band.SetNoDataValue(float(fill_value))
 
         # But it doesn't read in the georeferencing system properly ...
-
         from pyhdf.SD import SD, SDC
         hdf = SD(filename, SDC.READ)
         latitudes = hdf.select('latitude')[:]
@@ -170,8 +169,8 @@ def open_dataset(filename):
 
         return dataset
     else:
-        assert False, "Invalid file extension " + filename.split(".")[
-            -1:] + ", expected 'tif' or 'hdf'"
+        assert False, "Invalid file extension " + extension \
+            + ", expected 'tif' or 'hdf'"
 
 
 def time_format(timestamp):
@@ -331,7 +330,7 @@ if __name__ == "__main__":
         name_pre = '/products/' + ds_name
         hdf5_file[name_pre + '/meta'] = np.frombuffer(attr_ttl, dtype='uint8')
         hdf5_file[name_pre + '/numbands'] = num_bands
-        hdf5_file[name_pre + '/tilesize'] = 3 ** args.res_gap
+        hdf5_file[name_pre + '/tilesize'] = 3**args.res_gap
 
     elapsed = time() - start_time
     print("Done! Took %.2fs" % elapsed)
