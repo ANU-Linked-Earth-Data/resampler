@@ -10,7 +10,7 @@ import h5py
 from argparse import ArgumentParser, FileType
 from itertools import chain
 from io import BytesIO
-from os.path import basename, splitext
+from os.path import basename, splitext, extsep
 import re
 import sys
 from time import time
@@ -134,6 +134,7 @@ def reproject_dataset(dataset, dataset_projection, cell, resolution_gap):
 def open_dataset(filename):
     """ Reads a geotiff or a HDF4 file and returns a gdal dataset """
     _, extension = splitext(filename)
+    extension = extension.lstrip(extsep)
     if extension == "tif":
         return gdal.Open(filename, gdalconst.GA_ReadOnly)
     elif extension == "hdf":

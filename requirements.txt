@@ -5,6 +5,8 @@ matplotlib>=1.5.1,<1.6.0
 pytz>=2016.2
 pyproj>=1.9.5
 git+https://github.com/ANU-Linked-Earth-Data/dggs@61b94530bf709ac6685ee9e81ca0ee74f58168a6
+# python-hdf4 (pyhdf fork) requires libhdf4-dev on Ubuntu
+python-hdf4>=0.9,<0.10
 
 # GDAL is a PITA to install. Might want to follow instructions at
 # http://gis.stackexchange.com/a/119565 if pip install doesn't work. I
