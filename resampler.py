@@ -2,12 +2,13 @@
 
 from osgeo import gdal, gdalconst, osr
 import pytz
+from dateutil.parser import parse as parse_date
 from rhealpix_dggs import dggs
 import numpy as np
 from scipy.misc import imsave
 import h5py
 
-from argparse import ArgumentParser, FileType
+from argparse import ArgumentParser, ArgumentTypeError, FileType
 from itertools import chain
 from io import BytesIO
 from os.path import basename, splitext, extsep
@@ -278,6 +279,18 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
     return num_bands
 
 
+def timestamp_arg(str_value):
+    """argparse argument type that turns a supplied string value into a
+    zone-aware datetime."""
+    try:
+        rv = parse_date(str_value)
+    except ValueError:
+        raise ArgumentTypeError("Couldn't parse date string '%s'" % str_value)
+    if rv.tzinfo is None:
+        raise ArgumentTypeError("Date string '%s' has no timezone" % str_value)
+    return rv
+
+
 parser = ArgumentParser()
 parser.add_argument('input',
                     type=str,
@@ -293,6 +306,11 @@ parser.add_argument('--ds-name',
                     dest='ds_name',
                     default=None,
                     help='internal name for the new dataset')
+parser.add_argument('--timestamp',
+                    type=timestamp_arg,
+                    dest='timestamp',
+                    default=None,
+                    help='override default timestamp')
 parser.add_argument('--attributes',
                     type=FileType('r'),
                     default=None,
@@ -312,6 +330,7 @@ if __name__ == "__main__":
 
     dataset = open_dataset(args.input)
     ds_name = args.ds_name
+    timestamp = args.timestamp
     try:
         tif_meta = parse_agdc_fn(basename(args.input))
         timestamp = tif_meta['datetime']
@@ -322,8 +341,9 @@ if __name__ == "__main__":
               file=sys.stderr)
         if ds_name is None:
             ds_name = 'unknown'
-        # give dataset a stupid timestamp just to spite the user
-        timestamp = pytz.datetime.datetime(1923, 6, 4, tzinfo=pytz.UTC)
+        if timestamp is None:
+            # give dataset a stupid timestamp just to spite the user
+            timestamp = pytz.datetime.datetime(1923, 6, 4, tzinfo=pytz.UTC)
 
     print('Using dataset name "%s" and timestamp "%s"' % (ds_name, timestamp))
 
