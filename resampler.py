@@ -128,7 +128,17 @@ def reproject_dataset(dataset, dataset_projection, cell, resolution_gap):
         rhealpix_projection.ExportToWkt(), gdal.GRA_Bilinear)
     assert error_code == 0, "Reprojection failed"
 
-    return dest
+    array = dest.ReadAsArray()
+    assert 2 <= array.ndim <= 3
+    if array.ndim == 2:
+        # Insert an extra axis for the band. Downstream code screws up
+        # otherwise.
+        array = array[np.newaxis, :]
+
+    assert array.ndim == 3
+    assert array.shape[1:] == (num_pixels, num_pixels)
+
+    return array
 
 
 def open_dataset(filename):
@@ -229,13 +239,14 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
                 continue  # Yucky polar cells, ignore for now, maybe fix later
 
             data = reproject_dataset(dataset, dataset_projection, cell,
-                                     resolution_gap).ReadAsArray()
+                                     resolution_gap)
             if not np.any(data):
                 continue
 
             pixel_value = np.array([(np.mean(x[np.nonzero(x)])
                                      if np.any(x[np.nonzero(x)]) else 0)
                                     for x in data])
+            assert pixel_value.ndim == 1
             num_bands = pixel_value.size
 
             # Write the HDF5 group in one go. This is faster than manipulating
