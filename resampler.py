@@ -5,7 +5,7 @@ import pytz
 from dateutil.parser import parse as parse_date
 from rhealpix_dggs import dggs
 import numpy as np
-from scipy.misc import imsave
+from scipy.misc import toimage
 import h5py
 
 from argparse import ArgumentParser, ArgumentTypeError, FileType
@@ -192,6 +192,22 @@ def time_format(timestamp):
     return as_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+def png_buffer(array):
+    """Convert an array to PNG, handling transparency in an
+    at-least-partially-sane manner."""
+    assert array.ndim == 2
+
+    im = toimage(array)
+    alpha = toimage(array != 0)
+    im.putalpha(alpha)
+
+    # Return format is a buffer of PNG-encoded data
+    fp = BytesIO()
+    im.save(fp, format='png')
+
+    return fp.getbuffer()
+
+
 def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
               ds_name, timestamp):
     """ Converts a gdal dataset into a hdf5 rhealpix file """
@@ -267,14 +283,13 @@ def from_file(filename, dataset, hdf5_file, max_resolution, resolution_gap,
             for band_num in range(data.shape[0]):
                 # Write out each band as a separate PNG
                 band_data = data[band_num]
-                out_bytes = BytesIO()
-                imsave(out_bytes, band_data, format='png')
+                out_bytes = png_buffer(band_data)
+
                 png_ds_name = ('png_band_%i' % band_num) + time_suffix
                 # H5T_OPAQUE (maps to np.void in h5py) doesn't work in JHDF5,
                 # so we use an unsigned byte array for this (actually binary)
                 # data.
-                ds_group[png_ds_name] = np.frombuffer(out_bytes.getbuffer(),
-                                                      dtype='uint8')
+                ds_group[png_ds_name] = np.frombuffer(out_bytes, dtype='uint8')
 
     return num_bands
 
